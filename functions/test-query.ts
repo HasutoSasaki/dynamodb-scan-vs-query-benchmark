@@ -5,13 +5,18 @@ import { Handler } from 'aws-lambda';
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 
-const TABLE_NAME = process.env.TABLE_NAME!;
-const INDEX_NAME = process.env.INDEX_NAME!;
-const TARGET_CATEGORY = 'electronics';
+const INDEX_NAME = 'category-name-index';
 
-export const handler: Handler = async () => {
-  console.log(`Starting Query benchmark on table: ${TABLE_NAME}, index: ${INDEX_NAME}`);
-  console.log(`Target category: ${TARGET_CATEGORY}`);
+interface QueryEvent {
+  tableName: string;
+  category?: string;
+}
+
+export const handler: Handler<QueryEvent> = async (event) => {
+  const tableName = event.tableName;
+  const targetCategory = event.category ?? '電子機器';
+  console.log(`Queryベンチマーク開始（テーブル: ${tableName}, インデックス: ${INDEX_NAME}）`);
+  console.log(`対象カテゴリ: ${targetCategory}`);
 
   const startTime = Date.now();
   let totalConsumedRCU = 0;
@@ -20,15 +25,15 @@ export const handler: Handler = async () => {
   let pageCount = 0;
   let lastEvaluatedKey: Record<string, unknown> | undefined;
 
-  // Query using GSI (paging through all results)
+  // GSIを使用したQuery（ページネーションで全結果を取得）
   do {
     const response = await docClient.send(
       new QueryCommand({
-        TableName: TABLE_NAME,
+        TableName: tableName,
         IndexName: INDEX_NAME,
         KeyConditionExpression: 'category = :category',
         ExpressionAttributeValues: {
-          ':category': TARGET_CATEGORY,
+          ':category': targetCategory,
         },
         ReturnConsumedCapacity: 'TOTAL',
         ExclusiveStartKey: lastEvaluatedKey,
@@ -41,14 +46,15 @@ export const handler: Handler = async () => {
     totalConsumedRCU += response.ConsumedCapacity?.CapacityUnits || 0;
     lastEvaluatedKey = response.LastEvaluatedKey;
 
-    console.log(`Page ${pageCount}: Scanned=${response.ScannedCount}, Returned=${response.Count}, RCU=${response.ConsumedCapacity?.CapacityUnits}`);
+    console.log(`ページ${pageCount}: スキャン件数=${response.ScannedCount}, 返却件数=${response.Count}, 消費RCU=${response.ConsumedCapacity?.CapacityUnits}`);
   } while (lastEvaluatedKey);
 
   const responseTimeMs = Date.now() - startTime;
 
   const result = {
     operation: 'query',
-    targetCategory: TARGET_CATEGORY,
+    tableName,
+    targetCategory,
     responseTimeMs,
     consumedRCU: totalConsumedRCU,
     scannedCount,
@@ -56,6 +62,6 @@ export const handler: Handler = async () => {
     pageCount,
   };
 
-  console.log('Query result:', JSON.stringify(result, null, 2));
+  console.log('Query結果:', JSON.stringify(result, null, 2));
   return result;
 };
