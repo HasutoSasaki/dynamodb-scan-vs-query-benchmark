@@ -13,24 +13,36 @@ ECサイトでよくある「カテゴリ別商品一覧」を取得する際の
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    DynamoDB Table: Products                  │
+│           DynamoDB Tables: Products-{100,1000,...}          │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │  Primary Key: id (UUID)                              │    │
 │  │  Attributes: category, createdAt, name, price, desc  │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                                                              │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │  GSI: category-index                                 │    │
+│  │  GSI: category-name-index                            │    │
 │  │  Partition Key: category                             │    │
-│  │  Sort Key: createdAt (新着順ソート用)                 │    │
+│  │  Sort Key: name (商品名でソート)                      │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 
 Lambda Functions:
-  - generate-products: 900件の商品データを生成
-  - test-scan: Scan + FilterExpressionで「electronics」カテゴリを検索
-  - test-query: Query (GSI)で「electronics」カテゴリを検索
+  - generate-products: 指定件数の商品データを生成
+  - test-scan: Scan + FilterExpressionで指定カテゴリを検索
+  - test-query: Query (GSI)で指定カテゴリを検索
 ```
+
+## データサイズ
+
+複数のデータサイズでベンチマークを実行できるよう、以下のテーブルが作成されます：
+
+| テーブル名 | データ件数 |
+|-----------|-----------|
+| Products-100 | 100件 |
+| Products-1000 | 1,000件 |
+| Products-10000 | 10,000件 |
+| Products-100000 | 100,000件 |
+| Products-1000000 | 1,000,000件 |
 
 ## データ構造
 
@@ -38,23 +50,23 @@ Lambda Functions:
 |-----------|-----|------|
 | id | String | UUID（プライマリキー） |
 | category | String | 商品カテゴリ（GSIパーティションキー） |
-| createdAt | String | ISO 8601タイムスタンプ（GSIソートキー） |
-| name | String | 商品名 |
+| name | String | 商品名（GSIソートキー） |
+| createdAt | Number | Unixタイムスタンプ（ミリ秒） |
 | price | Number | 価格（100〜10099円） |
 | description | String | 商品説明（約1KB） |
 
-## カテゴリ分布（900件）
+## カテゴリ分布
 
-| カテゴリ | 割合 | 件数 | 備考 |
-|---------|------|------|------|
-| electronics | 30% | 270件 | **検索対象** |
-| clothing | 25% | 225件 | |
-| books | 25% | 225件 | |
-| food | 20% | 180件 | |
+| カテゴリ | 割合 | 備考 |
+|---------|------|------|
+| 電子機器 | 30% | デフォルト検索対象 |
+| 衣類 | 25% | |
+| 書籍 | 25% | |
+| 食品 | 20% | |
 
 ## 前提条件
 
-- Node.js 20以上
+- Node.js 24以上
 - pnpm
 - AWS CLI設定済み
 - CDK Bootstrap済み（初回のみ `cdk bootstrap` 実行）
@@ -79,23 +91,37 @@ pnpm run deploy
 
 ### 3. 商品データ生成
 
+Lambda関数を直接invokeしてデータを生成します：
+
 ```bash
-pnpm run generate-products
+# 1,000件のデータを生成する例
+aws lambda invoke \
+  --function-name BenchmarkStack-GenerateProductsFunction \
+  --payload '{"tableName": "Products-1000", "totalItems": 1000}' \
+  --cli-binary-format raw-in-base64-out \
+  /dev/stdout
+
+# 100,000件のデータを生成する例
+aws lambda invoke \
+  --function-name BenchmarkStack-GenerateProductsFunction \
+  --payload '{"tableName": "Products-100000", "totalItems": 100000}' \
+  --cli-binary-format raw-in-base64-out \
+  /dev/stdout
 ```
 
 出力例:
 ```json
 {
   "success": true,
-  "totalProducts": 900,
+  "totalProducts": 1000,
   "categoryBreakdown": {
-    "electronics": 270,
-    "clothing": 225,
-    "books": 225,
-    "food": 180
+    "電子機器": 300,
+    "衣類": 250,
+    "書籍": 250,
+    "食品": 200
   },
   "durationMs": 5432,
-  "tableName": "Products"
+  "tableName": "Products-1000"
 }
 ```
 
@@ -103,10 +129,27 @@ pnpm run generate-products
 
 ```bash
 # Scan + FilterExpressionのベンチマーク
-pnpm run test-scan
+aws lambda invoke \
+  --function-name BenchmarkStack-TestScanFunction \
+  --payload '{"tableName": "Products-1000", "category": "電子機器"}' \
+  --cli-binary-format raw-in-base64-out \
+  /dev/stdout
 
 # Query (GSI)のベンチマーク
-pnpm run test-query
+aws lambda invoke \
+  --function-name BenchmarkStack-TestQueryFunction \
+  --payload '{"tableName": "Products-1000", "category": "電子機器"}' \
+  --cli-binary-format raw-in-base64-out \
+  /dev/stdout
+```
+
+ログの確認：
+```bash
+# Scanのログを確認
+pnpm run show-logs-scan
+
+# Queryのログを確認
+pnpm run show-logs-query
 ```
 
 ### 5. クリーンアップ
@@ -121,11 +164,12 @@ pnpm run destroy
 ```json
 {
   "operation": "scan",
-  "targetCategory": "electronics",
+  "tableName": "Products-1000",
+  "targetCategory": "電子機器",
   "responseTimeMs": 245,
   "consumedRCU": 115.5,
-  "scannedCount": 900,
-  "returnedCount": 270,
+  "scannedCount": 1000,
+  "returnedCount": 300,
   "pageCount": 1
 }
 ```
@@ -134,11 +178,12 @@ pnpm run destroy
 ```json
 {
   "operation": "query",
-  "targetCategory": "electronics",
+  "tableName": "Products-1000",
+  "targetCategory": "電子機器",
   "responseTimeMs": 78,
   "consumedRCU": 35.0,
-  "scannedCount": 270,
-  "returnedCount": 270,
+  "scannedCount": 300,
+  "returnedCount": 300,
   "pageCount": 1
 }
 ```
@@ -149,36 +194,36 @@ pnpm run destroy
 |------|------|-------|--------|
 | レスポンス時間 | ~245ms | ~78ms | **約3倍高速** |
 | 消費RCU | ~115 | ~35 | **約70%削減** |
-| スキャン件数 | 900件 | 270件 | **70%削減** |
+| スキャン件数 | 全件 | 該当カテゴリのみ | **70%削減** |
 
 ## なぜQueryの方が効率的なのか
 
 ### Scanの動作
-1. 商品テーブル全体（900件）を読み取る
-2. 読み取り後にFilterExpressionで `category = 'electronics'` 以外を除外
-3. **RCUは全900件分消費される**（フィルターは読み取り後に適用）
+1. 商品テーブル全体を読み取る
+2. 読み取り後にFilterExpressionで該当カテゴリ以外を除外
+3. **RCUは全件分消費される**（フィルターは読み取り後に適用）
 
 ### Queryの動作
-1. GSI `category-index` を使用して `category = 'electronics'` のパーティションに直接アクセス
-2. 該当する商品（270件）のみを読み取る
-3. **RCUは270件分のみ消費**
+1. GSI `category-name-index` を使用して該当カテゴリのパーティションに直接アクセス
+2. 該当する商品のみを読み取る
+3. **RCUは該当件数分のみ消費**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Scan: テーブル全体を走査してからフィルター                    │
 │  ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐                 │
-│  │ E │ C │ B │ F │ E │ C │ B │ E │ F │...│  → 900件読み取り │
+│  │ 電│ 衣│ 書│ 食│ 電│ 衣│ 書│ 電│ 食│...│  → 全件読み取り  │
 │  └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘                 │
 │                    ↓ FilterExpression                       │
-│              270件返却（でもRCUは900件分）                    │
+│              30%返却（でもRCUは全件分）                       │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
 │  Query: GSIで該当パーティションに直接アクセス                  │
 │  ┌───────────────────┐                                      │
-│  │ electronics (270) │ ← 直接アクセス                        │
+│  │ 電子機器 (30%)    │ ← 直接アクセス                        │
 │  └───────────────────┘                                      │
-│              270件返却（RCUも270件分）                        │
+│              30%返却（RCUも30%分）                            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -197,6 +242,7 @@ dynamodb-scan-vs-query-benchmark/
 ├── cdk.json
 ├── package.json
 ├── tsconfig.json
+├── CLAUDE.md                     # Claude Code用プロジェクト説明
 └── README.md
 ```
 
@@ -204,4 +250,5 @@ dynamodb-scan-vs-query-benchmark/
 
 - このプロジェクトは検証用途のため、テーブルの`RemovalPolicy`は`DESTROY`に設定されています
 - デプロイ先のAWSアカウントに課金が発生する可能性があります
+- 大量データ（100,000件以上）の生成には時間がかかります
 - 使用後は必ず`pnpm run destroy`でリソースを削除してください
