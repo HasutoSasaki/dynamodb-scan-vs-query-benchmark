@@ -36,7 +36,7 @@ export class BenchmarkStack extends cdk.Stack {
     // Lambda 関数（共通）
     // ========================
     const commonLambdaProps = {
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       memorySize: 1024,
       bundling: {
         minify: true,
