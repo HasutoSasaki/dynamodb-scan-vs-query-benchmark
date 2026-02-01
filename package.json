@@ -9,9 +9,11 @@
     "cdk": "cdk",
     "deploy": "cdk deploy --require-approval never",
     "destroy": "cdk destroy --force",
-    "generate-products": "aws lambda invoke --function-name BenchmarkStack-GenerateProductsFunction --log-type Tail /dev/stdout | jq -r '.LogResult' | base64 -d && echo",
-    "test-scan": "aws lambda invoke --function-name BenchmarkStack-TestScanFunction --log-type Tail /dev/stdout | jq -r '.LogResult' | base64 -d && echo",
-    "test-query": "aws lambda invoke --function-name BenchmarkStack-TestQueryFunction --log-type Tail /dev/stdout | jq -r '.LogResult' | base64 -d && echo"
+    "generate-products": "aws lambda invoke --function-name BenchmarkStack-GenerateProductsFunction /dev/null",
+    "test-scan": "aws lambda invoke --function-name BenchmarkStack-TestScanFunction /dev/null",
+    "test-query": "aws lambda invoke --function-name BenchmarkStack-TestQueryFunction /dev/null",
+    "show-logs-scan": "aws logs tail /aws/lambda/BenchmarkStack-TestScanFunction --since 5m",
+    "show-logs-query": "aws logs tail /aws/lambda/BenchmarkStack-TestQueryFunction --since 5m"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
