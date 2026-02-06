@@ -9,53 +9,32 @@ ECサイトでよくある「カテゴリ別商品一覧」を取得する際の
 1. **Scan + FilterExpression**: 全商品をスキャンして、カテゴリでフィルタリング
 2. **Query + GSI**: カテゴリ用のGSIを使用して、該当商品に直接アクセス
 
-## アーキテクチャ
+**検証軸**:
+- データ件数（100 〜 1,000,000件）
+- レコードサイズ（0.5KB, 1KB, 5KB）
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│           DynamoDB Tables: Products-{100,1000,...}          │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  Primary Key: id (UUID)                              │    │
-│  │  Attributes: category, createdAt, name, price, desc  │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │  GSI: category-name-index                            │    │
-│  │  Partition Key: category                             │    │
-│  │  Sort Key: name (商品名でソート)                      │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
+## テーブル構成
 
-Lambda Functions:
-  - test-scan: Scan + FilterExpressionで指定カテゴリを検索
-  - test-query: Query (GSI)で指定カテゴリを検索
+データ件数 × レコードサイズの組み合わせで15テーブルが作成されます：
 
-Local Scripts:
-  - generate-products-local.ts: 商品データをローカルから生成
-```
-
-## データサイズ
-
-複数のデータサイズでベンチマークを実行できるよう、以下のテーブルが作成されます：
-
-| テーブル名       | データ件数  |
-| ---------------- | ----------- |
-| Products-100     | 100件       |
-| Products-1000    | 1,000件     |
-| Products-10000   | 10,000件    |
-| Products-100000  | 100,000件   |
-| Products-1000000 | 1,000,000件 |
+| データ件数  | 0.5KB                  | 1KB                  | 5KB                  |
+| ----------- | ---------------------- | -------------------- | -------------------- |
+| 100件       | Products-100-0.5kb     | Products-100-1kb     | Products-100-5kb     |
+| 1,000件     | Products-1000-0.5kb    | Products-1000-1kb    | Products-1000-5kb    |
+| 10,000件    | Products-10000-0.5kb   | Products-10000-1kb   | Products-10000-5kb   |
+| 100,000件   | Products-100000-0.5kb  | Products-100000-1kb  | Products-100000-5kb  |
+| 1,000,000件 | Products-1000000-0.5kb | Products-1000000-1kb | Products-1000000-5kb |
 
 ## データ構造
 
-| フィールド  | 型     | 説明                                  |
-| ----------- | ------ | ------------------------------------- |
-| id          | String | UUID（プライマリキー）                |
-| category    | String | 商品カテゴリ（GSIパーティションキー） |
-| name        | String | 商品名（GSIソートキー）               |
-| createdAt   | Number | Unixタイムスタンプ（ミリ秒）          |
-| price       | Number | 価格（100〜10099円）                  |
-| description | String | 商品説明（約1KB）                     |
+| フィールド  | 型     | 説明                                             |
+| ----------- | ------ | ------------------------------------------------ |
+| id          | String | UUID（プライマリキー）                           |
+| category    | String | 商品カテゴリ（GSIパーティションキー）            |
+| name        | String | 商品名（GSIソートキー）                          |
+| createdAt   | Number | Unixタイムスタンプ（ミリ秒）                     |
+| price       | Number | 価格（100〜10099円）                             |
+| description | String | 商品説明（レコードサイズに応じて約0.35〜4.85KB） |
 
 ## カテゴリ分布
 
@@ -110,32 +89,39 @@ pnpm run generate-local 1000000 1 935000
 ### 4. ベンチマーク実行
 
 ```bash
-# Scan + FilterExpressionのベンチマーク
+# 全テーブルに対して一括実行（5回×ウォームアップ付き）
+./scripts/testing.sh
+
+# 個別実行（Scan）
 aws lambda invoke \
   --function-name BenchmarkStack-TestScanFunction \
-  --payload '{"tableName": "Products-1000", "category": "電子機器"}' \
+  --payload '{"tableName": "Products-1000-1kb", "category": "電子機器"}' \
   --cli-binary-format raw-in-base64-out \
   /dev/stdout
 
-# Query (GSI)のベンチマーク
+# 個別実行（Query）
 aws lambda invoke \
   --function-name BenchmarkStack-TestQueryFunction \
-  --payload '{"tableName": "Products-1000", "category": "電子機器"}' \
+  --payload '{"tableName": "Products-1000-1kb", "category": "電子機器"}' \
   --cli-binary-format raw-in-base64-out \
   /dev/stdout
 ```
 
-ログの確認：
+### 5. 結果の確認
 
 ```bash
-# Scanのログを確認
-pnpm run show-logs-scan
+# CloudWatchログから結果を集計（デフォルト: 過去2時間）
+./scripts/analyze-logs.sh
 
-# Queryのログを確認
-pnpm run show-logs-query
+# 期間を指定して集計
+./scripts/analyze-logs.sh 24h
+
+# 個別のログを確認
+pnpm run show-logs-scan   # Scanのログ
+pnpm run show-logs-query  # Queryのログ
 ```
 
-### 5. クリーンアップ
+### 6. クリーンアップ
 
 ```bash
 pnpm run destroy
@@ -148,7 +134,7 @@ pnpm run destroy
 ```json
 {
   "operation": "scan",
-  "tableName": "Products-1000",
+  "tableName": "Products-1000-1kb",
   "targetCategory": "電子機器",
   "responseTimeMs": 245,
   "consumedRCU": 115.5,
@@ -163,7 +149,7 @@ pnpm run destroy
 ```json
 {
   "operation": "query",
-  "tableName": "Products-1000",
+  "tableName": "Products-1000-1kb",
   "targetCategory": "電子機器",
   "responseTimeMs": 78,
   "consumedRCU": 35.0,
@@ -173,64 +159,25 @@ pnpm run destroy
 }
 ```
 
-## 期待される比較結果
-
-| 指標           | Scan   | Query            | 改善率        |
-| -------------- | ------ | ---------------- | ------------- |
-| レスポンス時間 | ~245ms | ~78ms            | **約3倍高速** |
-| 消費RCU        | ~115   | ~35              | **約70%削減** |
-| スキャン件数   | 全件   | 該当カテゴリのみ | **70%削減**   |
-
-## なぜQueryの方が効率的なのか
-
-### Scanの動作
-
-1. 商品テーブル全体を読み取る
-2. 読み取り後にFilterExpressionで該当カテゴリ以外を除外
-3. **RCUは全件分消費される**（フィルターは読み取り後に適用）
-
-### Queryの動作
-
-1. GSI `category-name-index` を使用して該当カテゴリのパーティションに直接アクセス
-2. 該当する商品のみを読み取る
-3. **RCUは該当件数分のみ消費**
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Scan: テーブル全体を走査してからフィルター                    │
-│  ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐                 │
-│  │ 電│ 衣│ 書│ 食│ 電│ 衣│ 書│ 電│ 食│...│  → 全件読み取り  │
-│  └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘                 │
-│                    ↓ FilterExpression                       │
-│              30%返却（でもRCUは全件分）                       │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│  Query: GSIで該当パーティションに直接アクセス                  │
-│  ┌───────────────────┐                                      │
-│  │ 電子機器 (30%)    │ ← 直接アクセス                        │
-│  └───────────────────┘                                      │
-│              30%返却（RCUも30%分）                            │
-└─────────────────────────────────────────────────────────────┘
-```
-
 ## ファイル構成
 
 ```
 dynamodb-scan-vs-query-benchmark/
 ├── bin/
-│   └── app.ts                    # CDKエントリーポイント
+│   └── app.ts                       # CDKエントリーポイント
 ├── lib/
-│   └── benchmark-stack.ts        # CDKスタック定義
+│   └── benchmark-stack.ts           # CDKスタック定義
 ├── functions/
-│   ├── test-scan.ts              # Scanベンチマーク Lambda
-│   └── test-query.ts             # Queryベンチマーク Lambda
+│   ├── test-scan.ts                 # Scanベンチマーク Lambda
+│   └── test-query.ts                # Queryベンチマーク Lambda
 ├── scripts/
-│   └── generate-products-local.ts # 商品データ生成スクリプト（ローカル実行）
+│   ├── generate-products-local.ts   # 商品データ生成（ローカル実行）
+│   ├── testing.sh                   # ベンチマーク一括実行
+│   └── analyze-logs.sh              # 結果集計スクリプト
 ├── cdk.json
 ├── package.json
 ├── tsconfig.json
-├── CLAUDE.md                     # Claude Code用プロジェクト説明
+├── CLAUDE.md                        # Claude Code用プロジェクト説明
 └── README.md
 ```
 
@@ -240,5 +187,3 @@ dynamodb-scan-vs-query-benchmark/
 - デプロイ先のAWSアカウントに課金が発生する可能性があります
 - 大量データ（100,000件以上）の生成には時間がかかります
 - 使用後は必ず`pnpm run destroy`でリソースを削除してください
-
-Products-100000-0.5kb が途中で止まったので、データが中途半端な可能性がある。
