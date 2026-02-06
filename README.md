@@ -27,42 +27,44 @@ ECサイトでよくある「カテゴリ別商品一覧」を取得する際の
 └─────────────────────────────────────────────────────────────┘
 
 Lambda Functions:
-  - generate-products: 指定件数の商品データを生成
   - test-scan: Scan + FilterExpressionで指定カテゴリを検索
   - test-query: Query (GSI)で指定カテゴリを検索
+
+Local Scripts:
+  - generate-products-local.ts: 商品データをローカルから生成
 ```
 
 ## データサイズ
 
 複数のデータサイズでベンチマークを実行できるよう、以下のテーブルが作成されます：
 
-| テーブル名 | データ件数 |
-|-----------|-----------|
-| Products-100 | 100件 |
-| Products-1000 | 1,000件 |
-| Products-10000 | 10,000件 |
-| Products-100000 | 100,000件 |
+| テーブル名       | データ件数  |
+| ---------------- | ----------- |
+| Products-100     | 100件       |
+| Products-1000    | 1,000件     |
+| Products-10000   | 10,000件    |
+| Products-100000  | 100,000件   |
 | Products-1000000 | 1,000,000件 |
 
 ## データ構造
 
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| id | String | UUID（プライマリキー） |
-| category | String | 商品カテゴリ（GSIパーティションキー） |
-| name | String | 商品名（GSIソートキー） |
-| createdAt | Number | Unixタイムスタンプ（ミリ秒） |
-| price | Number | 価格（100〜10099円） |
-| description | String | 商品説明（約1KB） |
+| フィールド  | 型     | 説明                                  |
+| ----------- | ------ | ------------------------------------- |
+| id          | String | UUID（プライマリキー）                |
+| category    | String | 商品カテゴリ（GSIパーティションキー） |
+| name        | String | 商品名（GSIソートキー）               |
+| createdAt   | Number | Unixタイムスタンプ（ミリ秒）          |
+| price       | Number | 価格（100〜10099円）                  |
+| description | String | 商品説明（約1KB）                     |
 
 ## カテゴリ分布
 
-| カテゴリ | 割合 | 備考 |
-|---------|------|------|
-| 電子機器 | 30% | デフォルト検索対象 |
-| 衣類 | 25% | |
-| 書籍 | 25% | |
-| 食品 | 20% | |
+| カテゴリ | 割合 | 備考               |
+| -------- | ---- | ------------------ |
+| 電子機器 | 30%  | デフォルト検索対象 |
+| 衣類     | 25%  |                    |
+| 書籍     | 25%  |                    |
+| 食品     | 20%  |                    |
 
 ## 前提条件
 
@@ -91,38 +93,18 @@ pnpm run deploy
 
 ### 3. 商品データ生成
 
-Lambda関数を直接invokeしてデータを生成します：
+ローカルスクリプトでデータを生成します：
 
 ```bash
-# 1,000件のデータを生成する例
-aws lambda invoke \
-  --function-name BenchmarkStack-GenerateProductsFunction \
-  --payload '{"tableName": "Products-1000", "totalItems": 1000}' \
-  --cli-binary-format raw-in-base64-out \
-  /dev/stdout
+# 全テーブルにデータを生成
+pnpm run generate-local
 
-# 100,000件のデータを生成する例
-aws lambda invoke \
-  --function-name BenchmarkStack-GenerateProductsFunction \
-  --payload '{"tableName": "Products-100000", "totalItems": 100000}' \
-  --cli-binary-format raw-in-base64-out \
-  /dev/stdout
-```
+# 特定のテーブルのみ（件数、レコードサイズを指定）
+pnpm run generate-local 1000 1      # 1000件、1KB
+pnpm run generate-local 10000 0.5   # 10000件、0.5KB
 
-出力例:
-```json
-{
-  "success": true,
-  "totalProducts": 1000,
-  "categoryBreakdown": {
-    "電子機器": 300,
-    "衣類": 250,
-    "書籍": 250,
-    "食品": 200
-  },
-  "durationMs": 5432,
-  "tableName": "Products-1000"
-}
+# 途中から再開（件数、レコードサイズ、開始位置を指定）
+pnpm run generate-local 1000000 1 935000
 ```
 
 ### 4. ベンチマーク実行
@@ -144,6 +126,7 @@ aws lambda invoke \
 ```
 
 ログの確認：
+
 ```bash
 # Scanのログを確認
 pnpm run show-logs-scan
@@ -161,6 +144,7 @@ pnpm run destroy
 ## 期待される出力形式
 
 ### Scan結果
+
 ```json
 {
   "operation": "scan",
@@ -175,6 +159,7 @@ pnpm run destroy
 ```
 
 ### Query結果
+
 ```json
 {
   "operation": "query",
@@ -190,20 +175,22 @@ pnpm run destroy
 
 ## 期待される比較結果
 
-| 指標 | Scan | Query | 改善率 |
-|------|------|-------|--------|
-| レスポンス時間 | ~245ms | ~78ms | **約3倍高速** |
-| 消費RCU | ~115 | ~35 | **約70%削減** |
-| スキャン件数 | 全件 | 該当カテゴリのみ | **70%削減** |
+| 指標           | Scan   | Query            | 改善率        |
+| -------------- | ------ | ---------------- | ------------- |
+| レスポンス時間 | ~245ms | ~78ms            | **約3倍高速** |
+| 消費RCU        | ~115   | ~35              | **約70%削減** |
+| スキャン件数   | 全件   | 該当カテゴリのみ | **70%削減**   |
 
 ## なぜQueryの方が効率的なのか
 
 ### Scanの動作
+
 1. 商品テーブル全体を読み取る
 2. 読み取り後にFilterExpressionで該当カテゴリ以外を除外
 3. **RCUは全件分消費される**（フィルターは読み取り後に適用）
 
 ### Queryの動作
+
 1. GSI `category-name-index` を使用して該当カテゴリのパーティションに直接アクセス
 2. 該当する商品のみを読み取る
 3. **RCUは該当件数分のみ消費**
@@ -236,9 +223,10 @@ dynamodb-scan-vs-query-benchmark/
 ├── lib/
 │   └── benchmark-stack.ts        # CDKスタック定義
 ├── functions/
-│   ├── generate-products.ts      # 商品データ生成Lambda
 │   ├── test-scan.ts              # Scanベンチマーク Lambda
 │   └── test-query.ts             # Queryベンチマーク Lambda
+├── scripts/
+│   └── generate-products-local.ts # 商品データ生成スクリプト（ローカル実行）
 ├── cdk.json
 ├── package.json
 ├── tsconfig.json
@@ -252,3 +240,5 @@ dynamodb-scan-vs-query-benchmark/
 - デプロイ先のAWSアカウントに課金が発生する可能性があります
 - 大量データ（100,000件以上）の生成には時間がかかります
 - 使用後は必ず`pnpm run destroy`でリソースを削除してください
+
+Products-100000-0.5kb が途中で止まったので、データが中途半端な可能性がある。
